@@ -1,10 +1,11 @@
 {
-    "compilerOptions": {
-        "module": "esnext",
-        "target": "es2020",
-        "baseUrl": ".",
-        "moduleResolution": "node",
-        "outDir": "./dist"
-    },
-    "include": ["src/**/*", "rollup.config.ts"]
+  "compilerOptions": {
+    "module": "esnext",
+    "target": "es2020",
+    "moduleResolution": "bundler",
+    "strict": true,
+    "lib": ["esnext", "dom"],
+    "types": ["node"]
+  },
+  "include": ["src/**/*", "rolldown.config.ts"],
 }
