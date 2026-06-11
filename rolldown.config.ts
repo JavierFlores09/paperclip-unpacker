@@ -2,25 +2,14 @@ import { readFile } from "node:fs/promises";
 import { defineConfig } from "rolldown";
 
 const pkg = JSON.parse(await readFile("./package.json", "utf8"));
-const { name, version, description, dependencies } = pkg;
+const { name, version, description } = pkg;
 
-const externalDeps = Object.keys(dependencies || {}).filter(
-  (dep) => dep !== "@run-slicer/script"
-);
+const externalDeps = ["fflate", "bsdiff-wasm"];
 
-const paths: Record<string, string> = {};
-for (const dep of externalDeps) {
-  const depPkg = JSON.parse(
-    await readFile(`./node_modules/${dep}/package.json`, "utf8")
-  );
-  let entry = depPkg.module || depPkg.main || "index.js";
-  if (depPkg.exports && depPkg.exports["."]) {
-    const exp = depPkg.exports["."];
-    entry = exp.import?.default || exp.import || exp.default || entry;
-  }
-  entry = entry.replace(/^\.\//, "");
-  paths[dep] = `https://cdn.jsdelivr.net/npm/${dep}@${depPkg.version}/${entry}/+esm`;
-}
+const paths = {
+  fflate: "https://cdn.jsdelivr.net/npm/fflate@0.8.3/esm/browser.js",
+  "bsdiff-wasm": "https://unpkg.com/bsdiff-wasm",
+};
 
 export default defineConfig({
   input: "src/index.ts",
