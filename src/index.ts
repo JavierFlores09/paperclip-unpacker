@@ -1,36 +1,33 @@
 import { unzip } from "fflate";
 import { loadBspatch } from "bsdiff-wasm";
-import type {
-  Script,
-  ScriptContext,
-  Option,
-  EventMap,
-} from "@run-slicer/script";
+import type { Script, ScriptContext, Option } from "@run-slicer/script";
 
 const runButton = {
   type: "button",
   id: "paperclip-unpacker/run",
-  label: "Unpack Paper Jar",
+  label: "Select Paper Jar & Unpack",
 } as const;
 
 const translations: Record<string, Record<string, string>> = {
   en: {
-    "paperclip-unpacker/run.label": "Unpack Paper Jar",
+    "paperclip-unpacker/run.label": "Select Paper Jar & Unpack",
     "paperclip-unpacker/select-paper": "Select Paper jar",
-    "paperclip-unpacker/select-vanilla": "Select Vanilla jar (Expected: {0})",
-    "paperclip-unpacker/patches-found": "Patches to apply: {0}",
-    "paperclip-unpacker/applying": "Applying patches...",
-    "paperclip-unpacker/patched": "Patched: {0}",
-    "paperclip-unpacker/skip-original":
-      "Skipping - missing original in vanilla jar: {0}",
-    "paperclip-unpacker/skip-patch":
-      "Skipping - missing patch in Paper jar: {0}",
-    "paperclip-unpacker/done": "Done! {0}/{1} patches applied.",
+    "paperclip-unpacker/downloading-vanilla": "Downloading vanilla jar: {0}...",
     "paperclip-unpacker/error-context":
       "Could not find META-INF/download-context in Paper jar.",
     "paperclip-unpacker/error-patches":
       "Could not find META-INF/patches.list in Paper jar.",
-    "paperclip-unpacker/no-file": "No file selected.",
+    "paperclip-unpacker/dl-failed": "Download failed: {0}",
+    "paperclip-unpacker/fallback-pick-vanilla":
+      "Download failed. Please select the matching vanilla jar manually.",
+    "paperclip-unpacker/patches-found": "Patches to apply: {0}",
+    "paperclip-unpacker/applying": "Applying patches...",
+    "paperclip-unpacker/skip-original":
+      "Skipping - missing original in vanilla jar: {0}",
+    "paperclip-unpacker/skip-patch":
+      "Skipping - missing patch in Paper jar: {0}",
+    "paperclip-unpacker/patched": "[OK] {0}",
+    "paperclip-unpacker/done": "Done! {0}/{1} patches applied.",
   },
 };
 
@@ -38,20 +35,6 @@ function unzipBytes(bytes: Uint8Array): Promise<Record<string, Uint8Array>> {
   return new Promise((resolve, reject) => {
     unzip(bytes, (err, files) => (err ? reject(err) : resolve(files)));
   });
-}
-
-async function pickFile(accept: string): Promise<Uint8Array> {
-  const input = document.createElement("input");
-  input.type = "file";
-  input.accept = accept;
-
-  const file = await new Promise<File | undefined>((resolve) => {
-    input.onchange = () => resolve(input.files?.[0]);
-    input.click();
-  });
-
-  if (!file) throw new Error("No file selected");
-  return new Uint8Array(await file.arrayBuffer());
 }
 
 function parseDownloadContext(text: string): DownloadContext {
@@ -85,23 +68,55 @@ function parsePatchesList(text: string): PatchEntry[] {
     });
 }
 
-function createTranslator(context: ScriptContext) {
-  return (key: string, ...args: string[]) => {
+async function pickFile(accept: string): Promise<Uint8Array> {
+  return new Promise((resolve, reject) => {
+    const input = document.createElement("input");
+    input.type = "file";
+    input.accept = accept;
+    input.style.display = "none";
+
+    const cleanup = () => {
+      input.onchange = null;
+      if (document.body.contains(input)) document.body.removeChild(input);
+    };
+
+    input.onchange = async (e) => {
+      cleanup();
+      const file = (e.target as HTMLInputElement).files?.[0];
+      if (!file) {
+        reject(new Error("No file selected"));
+        return;
+      }
+      try {
+        resolve(new Uint8Array(await file.arrayBuffer()));
+      } catch (err) {
+        reject(err);
+      }
+    };
+
+    document.body.appendChild(input);
+    input.click();
+  });
+}
+
+function safeUnlink(fs: any, path: string): void {
+  try {
+    fs.unlink(path);
+  } catch {}
+}
+
+async function runUnpacker(context: ScriptContext): Promise<void> {
+  const t = (key: string, ...args: string[]) => {
     let str = key;
     try {
       str = context.i18n.t(key);
-      if (str === key) {
-        str = translations.en[key] || key;
-      }
+      if (str === key) str = translations.en[key] || key;
     } catch {
       str = translations.en[key] || key;
     }
     return args.reduce((acc, arg, i) => acc.replace(`{${i}}`, arg), str);
   };
-}
 
-async function runUnpacker(context: ScriptContext) {
-  const t = createTranslator(context);
   const dec = new TextDecoder();
 
   try {
@@ -126,8 +141,34 @@ async function runUnpacker(context: ScriptContext) {
       t("paperclip-unpacker/patches-found", patches.length.toString())
     );
 
-    console.log(t("paperclip-unpacker/select-vanilla", downloadCtx.fileName));
-    const vanillaBytes = await pickFile(".jar");
+    let vanillaBytes: Uint8Array;
+
+    try {
+      console.log(t("paperclip-unpacker/downloading-vanilla", downloadCtx.url));
+
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 30000);
+
+      const res = await fetch(downloadCtx.url, { signal: controller.signal });
+      clearTimeout(timeout);
+
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+
+      vanillaBytes = new Uint8Array(await res.arrayBuffer());
+    } catch (err: any) {
+      console.warn(
+        t("paperclip-unpacker/dl-failed", err.message || "Unknown Error")
+      );
+      console.log(t("paperclip-unpacker/fallback-pick-vanilla"));
+
+      vanillaBytes = await pickFile(".jar");
+    }
+
+    if (!vanillaBytes || vanillaBytes.length === 0) {
+      console.error("Failed to obtain vanilla jar.");
+      return;
+    }
+
     const vanillaZip = await unzipBytes(vanillaBytes);
 
     console.log(t("paperclip-unpacker/applying"));
@@ -138,14 +179,7 @@ async function runUnpacker(context: ScriptContext) {
       const originalKey = `META-INF/${patch.location}/${patch.originalPath}`;
       const patchKey = `META-INF/${patch.location}/${patch.patchPath}`;
 
-      let originalBytes =
-        vanillaZip[originalKey] ||
-        vanillaZip[`${patch.location}/${patch.originalPath}`];
-
-      if (!originalBytes && patch.originalPath === downloadCtx.fileName) {
-        originalBytes = vanillaBytes;
-      }
-
+      const originalBytes = vanillaZip[originalKey];
       const patchBytes = paperZip[patchKey];
 
       if (!originalBytes) {
@@ -157,16 +191,17 @@ async function runUnpacker(context: ScriptContext) {
         continue;
       }
 
+      const patchId = Math.random().toString(36).substring(2, 8);
+      const oldFile = `o${patchId}`;
+      const patchFile = `p${patchId}`;
+      const newFile = `n${patchId}`;
+
       try {
-        bspatch.FS.writeFile("old.bin", originalBytes);
-        bspatch.FS.writeFile("patch.bin", patchBytes);
-        bspatch.callMain(["old.bin", "new.bin", "patch.bin"]);
+        bspatch.FS.writeFile(oldFile, originalBytes);
+        bspatch.FS.writeFile(patchFile, patchBytes);
+        bspatch.callMain([oldFile, newFile, patchFile]);
 
-        const patched = bspatch.FS.readFile("new.bin");
-
-        bspatch.FS.unlink("old.bin");
-        bspatch.FS.unlink("patch.bin");
-        bspatch.FS.unlink("new.bin");
+        const patched = bspatch.FS.readFile(newFile);
 
         const workspaceName = `${patch.location}/${patch.outputPath}`;
         await context.workspace.add(workspaceName, patched);
@@ -175,15 +210,10 @@ async function runUnpacker(context: ScriptContext) {
         applied++;
       } catch (e) {
         console.error(`Failed to apply patch ${patch.originalPath}:`, e);
-        try {
-          bspatch.FS.unlink("old.bin");
-        } catch {}
-        try {
-          bspatch.FS.unlink("patch.bin");
-        } catch {}
-        try {
-          bspatch.FS.unlink("new.bin");
-        } catch {}
+      } finally {
+        safeUnlink(bspatch.FS, oldFile);
+        safeUnlink(bspatch.FS, patchFile);
+        safeUnlink(bspatch.FS, newFile);
       }
     }
 
