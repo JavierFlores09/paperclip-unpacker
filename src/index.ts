@@ -36,9 +36,7 @@ const translations: Record<string, Record<string, string>> = {
 
 function unzipBytes(bytes: Uint8Array): Promise<Record<string, Uint8Array>> {
   return new Promise((resolve, reject) => {
-    unzip(bytes, (err, files) =>
-      err ? reject(err) : resolve(files)
-    );
+    unzip(bytes, (err, files) => (err ? reject(err) : resolve(files)));
   });
 }
 
@@ -128,7 +126,6 @@ async function runUnpacker(context: ScriptContext) {
       t("paperclip-unpacker/patches-found", patches.length.toString())
     );
 
-    // Select vanilla jar
     console.log(t("paperclip-unpacker/select-vanilla", downloadCtx.fileName));
     const vanillaBytes = await pickFile(".jar");
     const vanillaZip = await unzipBytes(vanillaBytes);
@@ -141,7 +138,14 @@ async function runUnpacker(context: ScriptContext) {
       const originalKey = `META-INF/${patch.location}/${patch.originalPath}`;
       const patchKey = `META-INF/${patch.location}/${patch.patchPath}`;
 
-      const originalBytes = vanillaZip[originalKey];
+      let originalBytes =
+        vanillaZip[originalKey] ||
+        vanillaZip[`${patch.location}/${patch.originalPath}`];
+
+      if (!originalBytes && patch.originalPath === downloadCtx.fileName) {
+        originalBytes = vanillaBytes;
+      }
+
       const patchBytes = paperZip[patchKey];
 
       if (!originalBytes) {
@@ -208,14 +212,11 @@ const script: Script = {
       }
     }
 
-    context.addEventListener(
-      "option_change",
-      (e) => {
-        if (e.option === runButton) {
-          runUnpacker(context).catch((err) => console.error(err));
-        }
+    context.addEventListener("option_change", (e) => {
+      if (e.option === runButton) {
+        runUnpacker(context).catch((err) => console.error(err));
       }
-    );
+    });
   },
 
   unload(context: ScriptContext) {
