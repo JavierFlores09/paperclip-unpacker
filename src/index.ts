@@ -1,34 +1,48 @@
 import { unzip } from "fflate";
 import { loadBspatch } from "bsdiff-wasm";
-import type { Script, ScriptContext, Option } from "@run-slicer/script";
+import type {
+  Script,
+  ScriptContext,
+  Option,
+  CheckboxOption,
+  RadioOption,
+  ButtonOption,
+} from "@run-slicer/script";
 
-const runButton = {
+const FILL_API = "https://fill.papermc.io/v3/projects/paper";
+
+const versionRadio = {
+  type: "radio" as const,
+  id: "paperclip-unpacker/version",
+  label: "paperclip-unpacker/version.label",
+  items: [] as { id: string; label: string }[],
+  selected: "",
+};
+
+const verifyCheckbox: CheckboxOption = {
+  type: "checkbox",
+  id: "paperclip-unpacker/verify",
+  label: "paperclip-unpacker/verify.label",
+  checked: true,
+};
+
+const runButton: ButtonOption = {
   type: "button",
   id: "paperclip-unpacker/run",
-  label: "Select Paper Jar & Unpack",
-} as const;
+  label: "paperclip-unpacker/run.label",
+};
 
-const translations: Record<string, Record<string, string>> = {
-  en: {
-    "paperclip-unpacker/run.label": "Select Paper Jar & Unpack",
-    "paperclip-unpacker/select-paper": "Select Paper jar",
-    "paperclip-unpacker/downloading-vanilla": "Downloading vanilla jar: {0}...",
-    "paperclip-unpacker/error-context":
-      "Could not find META-INF/download-context in Paper jar.",
-    "paperclip-unpacker/error-patches":
-      "Could not find META-INF/patches.list in Paper jar.",
-    "paperclip-unpacker/dl-failed": "Download failed: {0}",
-    "paperclip-unpacker/fallback-pick-vanilla":
-      "Download failed. Please select the matching vanilla jar manually.",
-    "paperclip-unpacker/patches-found": "Patches to apply: {0}",
-    "paperclip-unpacker/applying": "Applying patches...",
-    "paperclip-unpacker/skip-original":
-      "Skipping - missing original in vanilla jar: {0}",
-    "paperclip-unpacker/skip-patch":
-      "Skipping - missing patch in Paper jar: {0}",
-    "paperclip-unpacker/patched": "[OK] {0}",
-    "paperclip-unpacker/done": "Done! {0}/{1} patches applied.",
-  },
+const manualRunButton: ButtonOption = {
+  type: "button",
+  id: "paperclip-unpacker/run-manual",
+  label: "paperclip-unpacker/run-manual.label",
+};
+
+const actionsGroup = {
+  type: "group" as const,
+  id: "paperclip-unpacker/actions",
+  label: "paperclip-unpacker/actions.label",
+  options: [runButton, manualRunButton] as Option[],
 };
 
 function unzipBytes(bytes: Uint8Array): Promise<Record<string, Uint8Array>> {
@@ -37,6 +51,16 @@ function unzipBytes(bytes: Uint8Array): Promise<Record<string, Uint8Array>> {
   });
 }
 
+async function sha256hex(bytes: Uint8Array): Promise<string> {
+  const buffer = bytes.buffer.slice(
+    bytes.byteOffset,
+    bytes.byteOffset + bytes.byteLength
+  ) as ArrayBuffer;
+  const hash = await crypto.subtle.digest("SHA-256", buffer);
+  return Array.from(new Uint8Array(hash))
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
+}
 function parseDownloadContext(text: string): DownloadContext {
   const [hash, url, fileName] = text.trim().split("\t");
   return { hash, url, fileName };
@@ -105,74 +129,240 @@ function safeUnlink(fs: any, path: string): void {
   } catch {}
 }
 
-async function runUnpacker(context: ScriptContext): Promise<void> {
+async function fetchVersions(): Promise<string[]> {
+  const res = await fetch(FILL_API);
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  const data = await res.json();
+  return Object.values(data.versions).flat() as string[];
+}
+
+async function fetchLatestBuild(version: string): Promise<any> {
+  const res = await fetch(`${FILL_API}/versions/${version}/builds/latest`);
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return await res.json();
+}
+
+async function runUnpacker(
+  context: ScriptContext,
+  isManual: boolean
+): Promise<void> {
   const t = (key: string, ...args: string[]) => {
-    let str = key;
-    try {
-      str = context.i18n.t(key);
-      if (str === key) str = translations.en[key] || key;
-    } catch {
-      str = translations.en[key] || key;
-    }
+    let str = context.i18n.t(key);
     return args.reduce((acc, arg, i) => acc.replace(`{${i}}`, arg), str);
   };
 
+  const version = versionRadio.selected;
+  if (!version) {
+    console.error(t("paperclip-unpacker/no-version"));
+    context.notification.error("paperclip-unpacker/no-version");
+    return;
+  }
+
+  const shouldVerify = verifyCheckbox.checked;
   const dec = new TextDecoder();
 
+  let toastId: string | number | undefined;
+
   try {
-    console.log(t("paperclip-unpacker/select-paper"));
-    const paperBytes = await pickFile(".jar");
+    let paperBytes: Uint8Array;
+
+    if (isManual) {
+      console.log(t("paperclip-unpacker/select-paper"));
+      toastId = context.notification.loading("paperclip-unpacker/select-paper");
+      paperBytes = await pickFile(".jar");
+    } else {
+      // 1. Fetch latest build metadata
+      console.log(t("paperclip-unpacker/fetching-build", version));
+      toastId = context.notification.loading(
+        "paperclip-unpacker/fetching-build",
+        {
+          msgArgs: [version],
+        }
+      );
+      const build = await fetchLatestBuild(version);
+
+      // The downloads map has an "application" entry for the paperclip jar
+      const appDownload = build.downloads?.["server:default"];
+      if (!appDownload) {
+        console.error(t("paperclip-unpacker/no-download"));
+        context.notification.error("paperclip-unpacker/no-download", {
+          id: toastId,
+        });
+        return;
+      }
+
+      // 2. Download or select the Paper jar
+      try {
+        console.log(
+          t(
+            "paperclip-unpacker/downloading-paper",
+            version,
+            build.id.toString()
+          )
+        );
+        context.notification.loading("paperclip-unpacker/downloading-paper", {
+          id: toastId,
+          msgArgs: [version, build.id.toString()],
+        });
+
+        const paperRes = await fetch(appDownload.url, {
+          headers: {
+            "User-Agent": "paperclip-unpacker-slicer/1.0.0",
+          },
+        });
+
+        if (!paperRes.ok) {
+          throw new Error(`HTTP ${paperRes.status}`);
+        }
+
+        paperBytes = new Uint8Array(await paperRes.arrayBuffer());
+      } catch (err: any) {
+        console.warn(t("paperclip-unpacker/download-failed-manual"));
+        context.notification.warning(
+          "paperclip-unpacker/download-failed-manual",
+          {
+            id: toastId,
+          }
+        );
+        console.warn(err);
+
+        // Prompt picker, but update the toast loader
+        context.notification.loading("paperclip-unpacker/select-paper", {
+          id: toastId,
+        });
+        paperBytes = await pickFile(".jar");
+      }
+
+      // Only verify hash if NOT manually selected and verification is enabled
+      if (shouldVerify) {
+        const paperHash = await sha256hex(paperBytes);
+        if (paperHash !== appDownload.checksums.sha256) {
+          const mismatchError = t(
+            "paperclip-unpacker/hash-mismatch-paper",
+            appDownload.checksums.sha256,
+            paperHash
+          );
+          console.error(mismatchError);
+          context.notification.error(mismatchError, { id: toastId });
+          return;
+        }
+        console.log(t("paperclip-unpacker/paper-verified"));
+      }
+    }
+
     const paperZip = await unzipBytes(paperBytes);
 
+    // 3. Parse download-context and patches.list from inside the Paper jar
     const downloadContextRaw = paperZip["META-INF/download-context"];
     if (!downloadContextRaw) {
-      console.error(t("paperclip-unpacker/error-context"));
+      console.error("META-INF/download-context not found in Paper jar");
+      context.notification.error(
+        "META-INF/download-context not found in Paper jar",
+        { id: toastId }
+      );
       return;
     }
+
     const downloadCtx = parseDownloadContext(dec.decode(downloadContextRaw));
 
     const patchesRaw = paperZip["META-INF/patches.list"];
     if (!patchesRaw) {
-      console.error(t("paperclip-unpacker/error-patches"));
+      console.error("META-INF/patches.list not found in Paper jar");
+      context.notification.error(
+        "META-INF/patches.list not found in Paper jar",
+        { id: toastId }
+      );
       return;
     }
+
     const patches = parsePatchesList(dec.decode(patchesRaw));
     console.log(
       t("paperclip-unpacker/patches-found", patches.length.toString())
     );
+    context.notification.info("paperclip-unpacker/patches-found", {
+      msgArgs: [patches.length.toString()],
+    });
+
+    // 4. Download vanilla jar
+    console.log(t("paperclip-unpacker/downloading-vanilla", downloadCtx.url));
+    context.notification.loading("paperclip-unpacker/downloading-vanilla", {
+      id: toastId,
+      msgArgs: [downloadCtx.url],
+    });
 
     let vanillaBytes: Uint8Array;
-
     try {
-      console.log(t("paperclip-unpacker/downloading-vanilla", downloadCtx.url));
-
       const controller = new AbortController();
       const timeout = setTimeout(() => controller.abort(), 30000);
 
-      const res = await fetch(downloadCtx.url, { signal: controller.signal });
+      const vanillaRes = await fetch(downloadCtx.url, {
+        signal: controller.signal,
+      });
       clearTimeout(timeout);
 
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      if (!vanillaRes.ok) {
+        throw new Error(`HTTP ${vanillaRes.status}`);
+      }
 
-      vanillaBytes = new Uint8Array(await res.arrayBuffer());
-    } catch (err: any) {
-      console.warn(
-        t("paperclip-unpacker/dl-failed", err.message || "Unknown Error")
+      vanillaBytes = new Uint8Array(await vanillaRes.arrayBuffer());
+      console.log(
+        "Vanilla jar downloaded, size:",
+        vanillaBytes.length.toString(),
+        "bytes"
       );
-      console.log(t("paperclip-unpacker/fallback-pick-vanilla"));
+    } catch (err: any) {
+      if (err.name === "AbortError") {
+        console.error("Vanilla download timed out");
+      } else {
+        console.error("Failed to download vanilla jar:", err);
+      }
 
+      console.log(t("paperclip-unpacker/fallback-pick-vanilla"));
+      context.notification.warning("paperclip-unpacker/fallback-pick-vanilla", {
+        id: toastId,
+      });
+
+      // Update loader to prompt picker
+      context.notification.loading("paperclip-unpacker/select-paper", {
+        id: toastId,
+      });
       vanillaBytes = await pickFile(".jar");
     }
 
+    // Verify we got the vanilla jar before continuing
     if (!vanillaBytes || vanillaBytes.length === 0) {
-      console.error("Failed to obtain vanilla jar.");
+      console.error("Failed to get vanilla jar");
+      context.notification.error("Failed to get vanilla jar", { id: toastId });
       return;
+    }
+
+    if (shouldVerify) {
+      console.log(t("paperclip-unpacker/verifying-vanilla"));
+      const vanillaHash = await sha256hex(vanillaBytes);
+      if (vanillaHash !== downloadCtx.hash) {
+        const mismatchError = t(
+          "paperclip-unpacker/hash-mismatch-vanilla",
+          downloadCtx.hash,
+          vanillaHash
+        );
+        console.error(mismatchError);
+        context.notification.error(mismatchError, { id: toastId });
+        return;
+      }
+      console.log(t("paperclip-unpacker/vanilla-verified"));
     }
 
     const vanillaZip = await unzipBytes(vanillaBytes);
 
-    console.log(t("paperclip-unpacker/applying"));
+    // 5. Init bspatch
+    console.log(t("paperclip-unpacker/init-bspatch"));
     const bspatch = await loadBspatch();
+
+    // 6. Apply patches
+    console.log(t("paperclip-unpacker/applying"));
+    context.notification.loading("paperclip-unpacker/applying", {
+      id: toastId,
+    });
     let applied = 0;
 
     for (const patch of patches) {
@@ -191,6 +381,22 @@ async function runUnpacker(context: ScriptContext): Promise<void> {
         continue;
       }
 
+      // Skip patch verification for manually selected jars
+      if (shouldVerify && !isManual) {
+        if ((await sha256hex(originalBytes)) !== patch.originalHash) {
+          console.error(
+            t("paperclip-unpacker/hash-mismatch-original", patch.originalPath)
+          );
+          continue;
+        }
+        if ((await sha256hex(patchBytes)) !== patch.patchHash) {
+          console.error(
+            t("paperclip-unpacker/hash-mismatch-patch", patch.patchPath)
+          );
+          continue;
+        }
+      }
+
       const patchId = Math.random().toString(36).substring(2, 8);
       const oldFile = `o${patchId}`;
       const patchFile = `p${patchId}`;
@@ -202,6 +408,18 @@ async function runUnpacker(context: ScriptContext): Promise<void> {
         bspatch.callMain([oldFile, newFile, patchFile]);
 
         const patched = bspatch.FS.readFile(newFile);
+
+        // Skip output verification for manually selected jars
+        if (
+          shouldVerify &&
+          !isManual &&
+          (await sha256hex(patched)) !== patch.outputHash
+        ) {
+          console.error(
+            t("paperclip-unpacker/hash-mismatch-output", patch.outputPath)
+          );
+          continue;
+        }
 
         const workspaceName = `${patch.location}/${patch.outputPath}`;
         await context.workspace.add(workspaceName, patched);
@@ -224,33 +442,155 @@ async function runUnpacker(context: ScriptContext): Promise<void> {
         patches.length.toString()
       )
     );
-  } catch (err) {
-    console.error("Unpacker failed:", err);
+    context.notification.success("paperclip-unpacker/done", {
+      id: toastId,
+      msgArgs: [applied.toString(), patches.length.toString()],
+    });
+  } catch (err: any) {
+    const failedMsg = `Unpacker failed: ${err.message || err}`;
+    console.error(failedMsg, err);
+    context.notification.error(failedMsg, { id: toastId });
   }
 }
+
+const TRANSLATIONS = {
+  en: {
+    "paperclip-unpacker/version.label": "Minecraft version",
+    "paperclip-unpacker/verify.label": "Verify hashes",
+    "paperclip-unpacker/actions.label": "Actions",
+    "paperclip-unpacker/run.label": "Download and unpack",
+    "paperclip-unpacker/run-manual.label": "Select Paper jar manually",
+    "paperclip-unpacker/no-version": "No version selected!",
+    "paperclip-unpacker/fetching-build": "Fetching latest build for {0}...",
+    "paperclip-unpacker/no-download":
+      "No application download found in build response!",
+    "paperclip-unpacker/downloading-paper":
+      "Downloading Paper {0} build #{1}...",
+    "paperclip-unpacker/select-paper": "Select Paper jar",
+    "paperclip-unpacker/dl-failed": "Download failed: {0}",
+    "paperclip-unpacker/download-failed-manual":
+      "Automatic download failed, please select the Paper jar manually.",
+    "paperclip-unpacker/hash-mismatch-paper":
+      "Paper jar hash mismatch! Expected {0}, got {1}",
+    "paperclip-unpacker/paper-verified": "Paper jar verified.",
+    "paperclip-unpacker/downloading-vanilla": "Downloading vanilla jar: {0}",
+    "paperclip-unpacker/verifying-vanilla": "Verifying vanilla jar hash...",
+    "paperclip-unpacker/vanilla-verified": "Vanilla jar verified.",
+    "paperclip-unpacker/hash-mismatch-vanilla":
+      "Vanilla jar hash mismatch! Expected {0}, got {1}",
+    "paperclip-unpacker/patches-found": "Patches to apply: {0}",
+    "paperclip-unpacker/init-bspatch": "Initializing bspatch...",
+    "paperclip-unpacker/applying": "Applying patches...",
+    "paperclip-unpacker/skip-original":
+      "Skipping - missing original in vanilla jar: {0}",
+    "paperclip-unpacker/skip-patch":
+      "Skipping - missing patch in Paper jar: {0}",
+    "paperclip-unpacker/hash-mismatch-original":
+      "Original hash mismatch, skipping: {0}",
+    "paperclip-unpacker/hash-mismatch-patch":
+      "Patch hash mismatch, skipping: {0}",
+    "paperclip-unpacker/hash-mismatch-output":
+      "Output hash mismatch after patching: {0}",
+    "paperclip-unpacker/patched": "[OK] {0}",
+    "paperclip-unpacker/done": "Done! {0}/{1} patches applied.",
+    "paperclip-unpacker/versions-failed":
+      "Failed to fetch Paper versions: HTTP {0}",
+    "paperclip-unpacker/fallback-pick-vanilla":
+      "Download failed. Please select the matching vanilla jar manually.",
+    "paperclip-unpacker/error-context":
+      "Could not find META-INF/download-context in Paper jar.",
+    "paperclip-unpacker/error-patches":
+      "Could not find META-INF/patches.list in Paper jar.",
+  },
+  es: {
+    "paperclip-unpacker/version.label": "Versión de Minecraft",
+    "paperclip-unpacker/verify.label": "Verificar firmas (hashes)",
+    "paperclip-unpacker/actions.label": "Acciones",
+    "paperclip-unpacker/run.label": "Descargar y desempaquetar",
+    "paperclip-unpacker/run-manual.label":
+      "Seleccionar archivo Paper manualmente",
+    "paperclip-unpacker/no-version": "¡No se ha seleccionado ninguna versión!",
+    "paperclip-unpacker/fetching-build":
+      "Obteniendo la última compilación de {0}...",
+    "paperclip-unpacker/no-download":
+      "¡No se encontró la descarga de la aplicación en la respuesta de la compilación!",
+    "paperclip-unpacker/downloading-paper":
+      "Descargando Paper {0} compilación #{1}...",
+    "paperclip-unpacker/select-paper": "Seleccionar archivo Paper (.jar)",
+    "paperclip-unpacker/dl-failed": "Descarga fallida: {0}",
+    "paperclip-unpacker/download-failed-manual":
+      "La descarga automática falló, por favor selecciona el archivo Paper manualmente.",
+    "paperclip-unpacker/hash-mismatch-paper":
+      "¡Firma del archivo Paper incorrecta! Esperada {0}, obtenida {1}",
+    "paperclip-unpacker/paper-verified": "Archivo Paper verificado con éxito.",
+    "paperclip-unpacker/downloading-vanilla":
+      "Descargando archivo vanilla: {0}",
+    "paperclip-unpacker/verifying-vanilla":
+      "Verificando firma del archivo vanilla...",
+    "paperclip-unpacker/vanilla-verified":
+      "Archivo vanilla verificado con éxito.",
+    "paperclip-unpacker/hash-mismatch-vanilla":
+      "¡Firma del archivo vanilla incorrecta! Esperada {0}, obtenida {1}",
+    "paperclip-unpacker/patches-found": "Parches a aplicar: {0}",
+    "paperclip-unpacker/init-bspatch": "Inicializando bspatch...",
+    "paperclip-unpacker/applying": "Aplicando parches...",
+    "paperclip-unpacker/skip-original":
+      "Omitiendo - falta el original en el archivo vanilla: {0}",
+    "paperclip-unpacker/skip-patch":
+      "Omitiendo - falta el parche en el archivo Paper: {0}",
+    "paperclip-unpacker/hash-mismatch-original":
+      "Firma del original incorrecta, omitiendo: {0}",
+    "paperclip-unpacker/hash-mismatch-patch":
+      "Firma del parche incorrecta, omitiendo: {0}",
+    "paperclip-unpacker/hash-mismatch-output":
+      "Firma del resultado incorrecta tras parchar: {0}",
+    "paperclip-unpacker/patched": "[OK] {0}",
+    "paperclip-unpacker/done": "¡Listo! {0}/{1} parches aplicados.",
+    "paperclip-unpacker/versions-failed":
+      "Fallo al obtener las versiones de Paper: HTTP {0}",
+    "paperclip-unpacker/fallback-pick-vanilla":
+      "Descarga fallida. Por favor selecciona el archivo vanilla correspondiente manualmente.",
+    "paperclip-unpacker/error-context":
+      "No se pudo encontrar META-INF/download-context en el archivo Paper.",
+    "paperclip-unpacker/error-patches":
+      "No se pudo encontrar META-INF/patches.list en el archivo Paper.",
+  },
+} as const;
 
 const script: Script = {
   name: __SCRIPT_NAME__,
   description: __SCRIPT_DESCRIPTION__,
   version: __SCRIPT_VERSION__,
-  options: [runButton],
+  options: [versionRadio, verifyCheckbox, actionsGroup] as Option[],
 
   async load(context: ScriptContext) {
-    for (const [locale, keys] of Object.entries(translations)) {
+    for (const [locale, keys] of Object.entries(TRANSLATIONS)) {
       for (const [key, value] of Object.entries(keys)) {
         context.i18n.add(locale, key, value);
       }
     }
 
+    // Populate version list from API
+    try {
+      const versions = await fetchVersions();
+      versionRadio.items = versions.map((v) => ({ id: v, label: v }));
+      versionRadio.selected = versions[0];
+    } catch (e: any) {
+      console.error(`Failed to fetch Paper versions: ${e.message || e}`);
+    }
+
     context.addEventListener("option_change", (e) => {
       if (e.option === runButton) {
-        runUnpacker(context).catch((err) => console.error(err));
+        runUnpacker(context, false).catch((err) => console.error(err));
+      }
+      if (e.option === manualRunButton) {
+        runUnpacker(context, true).catch((err) => console.error(err));
       }
     });
   },
 
   unload(context: ScriptContext) {
-    for (const [locale, keys] of Object.entries(translations)) {
+    for (const [locale, keys] of Object.entries(TRANSLATIONS)) {
       for (const key of Object.keys(keys)) {
         context.i18n.remove(locale, key);
       }
