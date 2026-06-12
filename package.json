@@ -6,6 +6,7 @@
   "license": "Unlicense",
   "description": "Slicer.run script to unpack paperclip in-browser.",
   "scripts": {
+    "dev": "rolldown --config --watch",
     "build": "rolldown --config",
     "format": "prettier . --write"
   },
