@@ -9,8 +9,8 @@ importers:
   .:
     dependencies:
       '@run-slicer/script':
-        specifier: ^0.15.0
-        version: 0.15.0
+        specifier: ^0.16.0
+        version: 0.16.0
       bsdiff-wasm:
         specifier: ^0.1.4
         version: 0.1.4
@@ -149,8 +149,8 @@ packages:
   '@rolldown/pluginutils@1.0.1':
     resolution: {integrity: sha512-2j9bGt5Jh8hj+vPtgzPtl72j0yRxHAyumoo6TNfAjsLB04UtpSvPbPcDcBMxz7n+9CYB0c1GxQFxYRg2jimqGw==}
 
-  '@run-slicer/script@0.15.0':
-    resolution: {integrity: sha512-Qy0Mb736VKGyT+ifwsqH0l9xsZlSYsWQqwfTGHKVuRaTynHIrAczlEnDOnl3bsxDTluH1bRE5CkdE1t/aFa/Pw==}
+  '@run-slicer/script@0.16.0':
+    resolution: {integrity: sha512-lgNM2TGnTZW4NKjFLVGm+DHJwbk1Tr2uRjuL3AZFePTmmIHpaGog7N84PEoLNrXCZWXES9llO8YZdulgSMnYzg==}
 
   '@tybys/wasm-util@0.10.2':
     resolution: {integrity: sha512-RoBvJ2X0wuKlWFIjrwffGw1IqZHKQqzIchKaadZZfnNpsAYp2mM0h36JtPCjNDAHGgYez/15uMBpfGwchhiMgg==}
@@ -263,7 +263,7 @@ snapshots:
 
   '@rolldown/pluginutils@1.0.1': {}
 
-  '@run-slicer/script@0.15.0': {}
+  '@run-slicer/script@0.16.0': {}
 
   '@tybys/wasm-util@0.10.2':
     dependencies:
