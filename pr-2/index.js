@@ -83,7 +83,7 @@ const translations = {
 	},
 	es: {
 		"paperclip-unpacker/version.label": "Versión de Minecraft",
-		"paperclip-unpacker/verify.label": "Verific hash",
+		"paperclip-unpacker/verify.label": "Verificar hashes",
 		"paperclip-unpacker/actions.label": "Acciones",
 		"paperclip-unpacker/run.label": "Descargar y desempaquetar",
 		"paperclip-unpacker/run-manual.label": "Seleccionar archivo Paper manualmente",
