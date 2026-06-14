@@ -58,19 +58,39 @@ jobs:
           git commit -m "chore: remove PR ${{ github.event.pull_request.number }} preview"
           git push
 
-      - name: Comment preview URL
+      - name: Upsert preview comment
         if: github.event.action != 'closed'
         uses: actions/github-script@v7
         with:
           script: |
             const pr = context.issue.number;
-            const repo = context.repo.repo;
-            const owner = context.repo.owner;
+            const { owner, repo } = context.repo;
             const scriptUrl = `https://${owner}.github.io/${repo}/pr-${pr}/index.js`;
             const slicerUrl = `https://slicer.run/?script=${scriptUrl}`;
-            github.rest.issues.createComment({
+            const marker = "<!-- op:preview -->";
+            const body = `## 🚀 Preview deployed\n\n${marker}\n**Script**: ${scriptUrl}\n**Slicer**: ${slicerUrl}`;
+
+            const { data: comments } = await github.rest.issues.listComments({
               issue_number: pr,
               owner,
               repo,
-              body: `## 🚀 Preview deployed\n\n**Script**: ${scriptUrl}\n**Slicer**: ${slicerUrl}`
+              per_page: 100,
             });
+
+            const existing = comments.find(c => c.body?.includes(marker));
+
+            if (existing) {
+              await github.rest.issues.updateComment({
+                comment_id: existing.id,
+                owner,
+                repo,
+                body,
+              });
+            } else {
+              await github.rest.issues.createComment({
+                issue_number: pr,
+                owner,
+                repo,
+                body,
+              });
+            }
