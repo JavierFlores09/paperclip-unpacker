@@ -11,7 +11,7 @@
     "format": "prettier . --write"
   },
   "dependencies": {
-    "@run-slicer/script": "^0.16.0",
+    "@run-slicer/script": "^0.17.0",
     "bsdiff-wasm": "^0.1.4",
     "fflate": "^0.8.3"
   },
