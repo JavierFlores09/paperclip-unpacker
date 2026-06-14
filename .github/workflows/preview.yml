@@ -1,0 +1,96 @@
+name: PR Preview
+
+on:
+  pull_request_target:
+    types: [opened, synchronize, closed]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  preview:
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+          cache: "pnpm"
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build
+        run: pnpm run build
+
+      - name: Deploy PR preview
+        if: github.event.action != 'closed'
+        uses: peaceiris/actions-gh-pages@v4
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ./dist
+          destination_dir: pr-${{ github.event.pull_request.number }}
+          keep_files: true
+
+      - name: Remove PR preview
+        if: github.event.action == 'closed'
+        run: |
+          git fetch origin gh-pages 2>/dev/null || exit 0
+          git checkout gh-pages
+          rm -rf pr-${{ github.event.pull_request.number }}
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add .
+          if git diff --cached --quiet; then
+            echo "Nothing to remove"
+            exit 0
+          fi
+          git commit -m "chore: remove PR ${{ github.event.pull_request.number }} preview"
+          git push
+
+      - name: Upsert preview comment
+        if: github.event.action != 'closed'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const pr = context.issue.number;
+            const { owner, repo } = context.repo;
+            const scriptUrl = `https://${owner}.github.io/${repo}/pr-${pr}/index.js`;
+            const slicerUrl = `https://slicer.run/?script=${scriptUrl}`;
+            const marker = "<!-- op:preview -->";
+            const body = `## 🚀 Preview deployed\n\n${marker}\n**Script**: ${scriptUrl}\n**Slicer**: ${slicerUrl}`;
+
+            const { data: comments } = await github.rest.issues.listComments({
+              issue_number: pr,
+              owner,
+              repo,
+              per_page: 100,
+            });
+
+            const existing = comments.find(c => c.body?.includes(marker));
+
+            if (existing) {
+              await github.rest.issues.updateComment({
+                comment_id: existing.id,
+                owner,
+                repo,
+                body,
+              });
+            } else {
+              await github.rest.issues.createComment({
+                issue_number: pr,
+                owner,
+                repo,
+                body,
+              });
+            }
