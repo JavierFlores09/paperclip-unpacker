@@ -1,7 +1,6 @@
-import { unzip } from "https://cdn.jsdelivr.net/npm/fflate@0.8.3/esm/browser.js";
 import { loadBspatch } from "https://unpkg.com/bsdiff-wasm";
-//#region src/index.ts
-const FILL_API = "https://fill.papermc.io/v3/projects/paper";
+import { unzip } from "https://cdn.jsdelivr.net/npm/fflate@0.8.3/esm/browser.js";
+//#region src/ui.ts
 const versionRadio = {
 	type: "radio",
 	id: "paperclip-unpacker/version",
@@ -31,39 +30,115 @@ const actionsGroup = {
 	label: "paperclip-unpacker/actions.label",
 	options: [runButton, manualRunButton]
 };
+//#endregion
+//#region src/api.ts
+const FILL_API = "https://fill.papermc.io/v3/projects/paper";
+async function fetchVersions() {
+	const res = await fetch(FILL_API);
+	if (!res.ok) throw new Error(`HTTP ${res.status}`);
+	const data = await res.json();
+	return Object.values(data.versions).flat();
+}
+async function fetchLatestBuild(version) {
+	const res = await fetch(`${FILL_API}/versions/${version}/builds/latest`);
+	if (!res.ok) throw new Error(`HTTP ${res.status}`);
+	return await res.json();
+}
+//#endregion
+//#region src/i18n.ts
+const translations = {
+	en: {
+		"paperclip-unpacker/version.label": "Minecraft version",
+		"paperclip-unpacker/verify.label": "Verify hashes",
+		"paperclip-unpacker/actions.label": "Actions",
+		"paperclip-unpacker/run.label": "Download and unpack",
+		"paperclip-unpacker/run-manual.label": "Select Paper jar manually",
+		"paperclip-unpacker/no-version": "No version selected!",
+		"paperclip-unpacker/fetching-build": "Fetching latest build for {0}...",
+		"paperclip-unpacker/no-download": "No application download found in build response!",
+		"paperclip-unpacker/downloading-paper": "Downloading Paper {0} build #{1}...",
+		"paperclip-unpacker/select-paper": "Select Paper jar",
+		"paperclip-unpacker/download-failed-manual": "Automatic download failed, please select the Paper jar manually.",
+		"paperclip-unpacker/hash-mismatch-paper": "Paper jar hash mismatch! Expected {0}, got {1}",
+		"paperclip-unpacker/paper-verified": "Paper jar verified.",
+		"paperclip-unpacker/downloading-vanilla": "Downloading vanilla jar: {0}",
+		"paperclip-unpacker/verifying-vanilla": "Verifying vanilla jar hash...",
+		"paperclip-unpacker/vanilla-verified": "Vanilla jar verified.",
+		"paperclip-unpacker/hash-mismatch-vanilla": "Vanilla jar hash mismatch! Expected {0}, got {1}",
+		"paperclip-unpacker/patches-found": "Patches to apply: {0}",
+		"paperclip-unpacker/init-bspatch": "Initializing bspatch...",
+		"paperclip-unpacker/applying": "Applying patches...",
+		"paperclip-unpacker/skip-original": "Skipping - missing original in vanilla jar: {0}",
+		"paperclip-unpacker/skip-patch": "Skipping - missing patch in Paper jar: {0}",
+		"paperclip-unpacker/hash-mismatch-original": "Original hash mismatch, skipping: {0}",
+		"paperclip-unpacker/hash-mismatch-patch": "Patch hash mismatch, skipping: {0}",
+		"paperclip-unpacker/hash-mismatch-output": "Output hash mismatch after patching: {0}",
+		"paperclip-unpacker/patched": "[OK] {0}",
+		"paperclip-unpacker/done": "Done! {0}/{1} patches applied.",
+		"paperclip-unpacker/fallback-pick-vanilla": "Download failed. Please select the matching vanilla jar manually.",
+		"paperclip-unpacker/error-context": "Could not find META-INF/download-context in Paper jar.",
+		"paperclip-unpacker/error-patches": "Could not find META-INF/patches.list in Paper jar.",
+		"paperclip-unpacker/error-vanilla-empty": "Failed to get vanilla jar.",
+		"paperclip-unpacker/error-generic": "Unpacker failed: {0}"
+	},
+	es: {
+		"paperclip-unpacker/version.label": "Versión de Minecraft",
+		"paperclip-unpacker/verify.label": "Verificar hashes",
+		"paperclip-unpacker/actions.label": "Acciones",
+		"paperclip-unpacker/run.label": "Descargar y desempaquetar",
+		"paperclip-unpacker/run-manual.label": "Seleccionar archivo Paper manualmente",
+		"paperclip-unpacker/no-version": "¡No se ha seleccionado ninguna versión!",
+		"paperclip-unpacker/fetching-build": "Obteniendo la última compilación de {0}...",
+		"paperclip-unpacker/no-download": "¡No se encontró la descarga de la aplicación en la respuesta de la compilación!",
+		"paperclip-unpacker/downloading-paper": "Descargando Paper {0} compilación #{1}...",
+		"paperclip-unpacker/select-paper": "Seleccionar archivo Paper (.jar)",
+		"paperclip-unpacker/download-failed-manual": "La descarga automática falló, por favor selecciona el archivo Paper manualmente.",
+		"paperclip-unpacker/hash-mismatch-paper": "¡Firma del archivo Paper incorrecta! Esperada {0}, obtenida {1}",
+		"paperclip-unpacker/paper-verified": "Archivo Paper verificado con éxito.",
+		"paperclip-unpacker/downloading-vanilla": "Descargando archivo vanilla: {0}",
+		"paperclip-unpacker/verifying-vanilla": "Verificando firma del archivo vanilla...",
+		"paperclip-unpacker/vanilla-verified": "Archivo vanilla verificado con éxito.",
+		"paperclip-unpacker/hash-mismatch-vanilla": "¡Firma del archivo vanilla incorrecta! Esperada {0}, obtenida {1}",
+		"paperclip-unpacker/patches-found": "Parches a aplicar: {0}",
+		"paperclip-unpacker/init-bspatch": "Inicializando bspatch...",
+		"paperclip-unpacker/applying": "Aplicando parches...",
+		"paperclip-unpacker/skip-original": "Omitiendo - falta el original en el archivo vanilla: {0}",
+		"paperclip-unpacker/skip-patch": "Omitiendo - falta el parche en el archivo Paper: {0}",
+		"paperclip-unpacker/hash-mismatch-original": "Firma del original incorrecta, omitiendo: {0}",
+		"paperclip-unpacker/hash-mismatch-patch": "Firma del parche incorrecta, omitiendo: {0}",
+		"paperclip-unpacker/hash-mismatch-output": "Firma del resultado incorrecta tras parchar: {0}",
+		"paperclip-unpacker/patched": "[OK] {0}",
+		"paperclip-unpacker/done": "¡Listo! {0}/{1} parches aplicados.",
+		"paperclip-unpacker/fallback-pick-vanilla": "Descarga fallida. Por favor selecciona el archivo vanilla correspondiente manualmente.",
+		"paperclip-unpacker/error-context": "No se pudo encontrar META-INF/download-context en el archivo Paper.",
+		"paperclip-unpacker/error-patches": "No se pudo encontrar META-INF/patches.list en el archivo Paper.",
+		"paperclip-unpacker/error-vanilla-empty": "No se pudo obtener el archivo vanilla.",
+		"paperclip-unpacker/error-generic": "El desempaquetador falló: {0}"
+	}
+};
+function loadTranslations(context) {
+	for (const [locale, keys] of Object.entries(translations)) for (const [key, value] of Object.entries(keys)) context.i18n.add(locale, key, value);
+}
+function unloadTranslations(context) {
+	for (const [locale, keys] of Object.entries(translations)) for (const key of Object.keys(keys)) context.i18n.remove(locale, key);
+}
+//#endregion
+//#region src/utils/archive.ts
 function unzipBytes(bytes) {
 	return new Promise((resolve, reject) => {
 		unzip(bytes, (err, files) => err ? reject(err) : resolve(files));
 	});
 }
+//#endregion
+//#region src/utils/crypto.ts
 async function sha256hex(bytes) {
 	const buffer = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
 	const hash = await crypto.subtle.digest("SHA-256", buffer);
 	return Array.from(new Uint8Array(hash)).map((b) => b.toString(16).padStart(2, "0")).join("");
 }
-function parseDownloadContext(text) {
-	const [hash, url, fileName] = text.trim().split("	");
-	return {
-		hash,
-		url,
-		fileName
-	};
-}
-function parsePatchesList(text) {
-	return text.split("\n").filter((line) => line.trim() && !line.startsWith("#")).map((line) => {
-		const [location, originalHash, patchHash, outputHash, originalPath, patchPath, outputPath] = line.split("	");
-		return {
-			location,
-			originalHash,
-			patchHash,
-			outputHash,
-			originalPath,
-			patchPath,
-			outputPath
-		};
-	});
-}
-async function pickFile(accept) {
+//#endregion
+//#region src/utils/file.ts
+function pickFile(accept) {
 	return new Promise((resolve, reject) => {
 		const input = document.createElement("input");
 		input.type = "file";
@@ -90,22 +165,37 @@ async function pickFile(accept) {
 		input.click();
 	});
 }
+//#endregion
+//#region src/utils/patcher.ts
+function parseDownloadContext(text) {
+	const [hash, url, fileName] = text.trim().split("	");
+	return {
+		hash,
+		url,
+		fileName
+	};
+}
+function parsePatchesList(text) {
+	return text.split("\n").filter((line) => line.trim() && !line.startsWith("#")).map((line) => {
+		const [location, originalHash, patchHash, outputHash, originalPath, patchPath, outputPath] = line.split("	");
+		return {
+			location,
+			originalHash,
+			patchHash,
+			outputHash,
+			originalPath,
+			patchPath,
+			outputPath
+		};
+	});
+}
 function safeUnlink(fs, path) {
 	try {
 		fs.unlink(path);
 	} catch {}
 }
-async function fetchVersions() {
-	const res = await fetch(FILL_API);
-	if (!res.ok) throw new Error(`HTTP ${res.status}`);
-	const data = await res.json();
-	return Object.values(data.versions).flat();
-}
-async function fetchLatestBuild(version) {
-	const res = await fetch(`${FILL_API}/versions/${version}/builds/latest`);
-	if (!res.ok) throw new Error(`HTTP ${res.status}`);
-	return await res.json();
-}
+//#endregion
+//#region src/unpacker.ts
 async function runUnpacker(context, isManual) {
 	const t = (key, ...args) => {
 		let str = context.i18n.t(key);
@@ -284,87 +374,19 @@ async function runUnpacker(context, isManual) {
 		});
 	}
 }
-const TRANSLATIONS = {
-	en: {
-		"paperclip-unpacker/version.label": "Minecraft version",
-		"paperclip-unpacker/verify.label": "Verify hashes",
-		"paperclip-unpacker/actions.label": "Actions",
-		"paperclip-unpacker/run.label": "Download and unpack",
-		"paperclip-unpacker/run-manual.label": "Select Paper jar manually",
-		"paperclip-unpacker/no-version": "No version selected!",
-		"paperclip-unpacker/fetching-build": "Fetching latest build for {0}...",
-		"paperclip-unpacker/no-download": "No application download found in build response!",
-		"paperclip-unpacker/downloading-paper": "Downloading Paper {0} build #{1}...",
-		"paperclip-unpacker/select-paper": "Select Paper jar",
-		"paperclip-unpacker/download-failed-manual": "Automatic download failed, please select the Paper jar manually.",
-		"paperclip-unpacker/hash-mismatch-paper": "Paper jar hash mismatch! Expected {0}, got {1}",
-		"paperclip-unpacker/paper-verified": "Paper jar verified.",
-		"paperclip-unpacker/downloading-vanilla": "Downloading vanilla jar: {0}",
-		"paperclip-unpacker/verifying-vanilla": "Verifying vanilla jar hash...",
-		"paperclip-unpacker/vanilla-verified": "Vanilla jar verified.",
-		"paperclip-unpacker/hash-mismatch-vanilla": "Vanilla jar hash mismatch! Expected {0}, got {1}",
-		"paperclip-unpacker/patches-found": "Patches to apply: {0}",
-		"paperclip-unpacker/init-bspatch": "Initializing bspatch...",
-		"paperclip-unpacker/applying": "Applying patches...",
-		"paperclip-unpacker/skip-original": "Skipping - missing original in vanilla jar: {0}",
-		"paperclip-unpacker/skip-patch": "Skipping - missing patch in Paper jar: {0}",
-		"paperclip-unpacker/hash-mismatch-original": "Original hash mismatch, skipping: {0}",
-		"paperclip-unpacker/hash-mismatch-patch": "Patch hash mismatch, skipping: {0}",
-		"paperclip-unpacker/hash-mismatch-output": "Output hash mismatch after patching: {0}",
-		"paperclip-unpacker/patched": "[OK] {0}",
-		"paperclip-unpacker/done": "Done! {0}/{1} patches applied.",
-		"paperclip-unpacker/fallback-pick-vanilla": "Download failed. Please select the matching vanilla jar manually.",
-		"paperclip-unpacker/error-context": "Could not find META-INF/download-context in Paper jar.",
-		"paperclip-unpacker/error-patches": "Could not find META-INF/patches.list in Paper jar.",
-		"paperclip-unpacker/error-vanilla-empty": "Failed to get vanilla jar.",
-		"paperclip-unpacker/error-generic": "Unpacker failed: {0}"
-	},
-	es: {
-		"paperclip-unpacker/version.label": "Versión de Minecraft",
-		"paperclip-unpacker/verify.label": "Verificar hashes",
-		"paperclip-unpacker/actions.label": "Acciones",
-		"paperclip-unpacker/run.label": "Descargar y desempaquetar",
-		"paperclip-unpacker/run-manual.label": "Seleccionar archivo Paper manualmente",
-		"paperclip-unpacker/no-version": "¡No se ha seleccionado ninguna versión!",
-		"paperclip-unpacker/fetching-build": "Obteniendo la última compilación de {0}...",
-		"paperclip-unpacker/no-download": "¡No se encontró la descarga de la aplicación en la respuesta de la compilación!",
-		"paperclip-unpacker/downloading-paper": "Descargando Paper {0} compilación #{1}...",
-		"paperclip-unpacker/select-paper": "Seleccionar archivo Paper (.jar)",
-		"paperclip-unpacker/download-failed-manual": "La descarga automática falló, por favor selecciona el archivo Paper manualmente.",
-		"paperclip-unpacker/hash-mismatch-paper": "¡Firma del archivo Paper incorrecta! Esperada {0}, obtenida {1}",
-		"paperclip-unpacker/paper-verified": "Archivo Paper verificado con éxito.",
-		"paperclip-unpacker/downloading-vanilla": "Descargando archivo vanilla: {0}",
-		"paperclip-unpacker/verifying-vanilla": "Verificando firma del archivo vanilla...",
-		"paperclip-unpacker/vanilla-verified": "Archivo vanilla verificado con éxito.",
-		"paperclip-unpacker/hash-mismatch-vanilla": "¡Firma del archivo vanilla incorrecta! Esperada {0}, obtenida {1}",
-		"paperclip-unpacker/patches-found": "Parches a aplicar: {0}",
-		"paperclip-unpacker/init-bspatch": "Inicializando bspatch...",
-		"paperclip-unpacker/applying": "Aplicando parches...",
-		"paperclip-unpacker/skip-original": "Omitiendo - falta el original en el archivo vanilla: {0}",
-		"paperclip-unpacker/skip-patch": "Omitiendo - falta el parche en el archivo Paper: {0}",
-		"paperclip-unpacker/hash-mismatch-original": "Firma del original incorrecta, omitiendo: {0}",
-		"paperclip-unpacker/hash-mismatch-patch": "Firma del parche incorrecta, omitiendo: {0}",
-		"paperclip-unpacker/hash-mismatch-output": "Firma del resultado incorrecta tras parchar: {0}",
-		"paperclip-unpacker/patched": "[OK] {0}",
-		"paperclip-unpacker/done": "¡Listo! {0}/{1} parches aplicados.",
-		"paperclip-unpacker/fallback-pick-vanilla": "Descarga fallida. Por favor selecciona el archivo vanilla correspondiente manualmente.",
-		"paperclip-unpacker/error-context": "No se pudo encontrar META-INF/download-context en el archivo Paper.",
-		"paperclip-unpacker/error-patches": "No se pudo encontrar META-INF/patches.list en el archivo Paper.",
-		"paperclip-unpacker/error-vanilla-empty": "No se pudo obtener el archivo vanilla.",
-		"paperclip-unpacker/error-generic": "El desempaquetador falló: {0}"
-	}
-};
+//#endregion
+//#region src/index.ts
 const script = {
 	name: "paperclip-unpacker",
 	description: "Slicer.run script to unpack paperclip in-browser.",
-	version: "1.0.0",
+	version: "1.1.0",
 	options: [
 		versionRadio,
 		verifyCheckbox,
 		actionsGroup
 	],
 	async load(context) {
-		for (const [locale, keys] of Object.entries(TRANSLATIONS)) for (const [key, value] of Object.entries(keys)) context.i18n.add(locale, key, value);
+		loadTranslations(context);
 		try {
 			const versions = await fetchVersions();
 			versionRadio.items = versions.map((v) => ({
@@ -381,7 +403,7 @@ const script = {
 		});
 	},
 	unload(context) {
-		for (const [locale, keys] of Object.entries(TRANSLATIONS)) for (const key of Object.keys(keys)) context.i18n.remove(locale, key);
+		unloadTranslations(context);
 	}
 };
 //#endregion
